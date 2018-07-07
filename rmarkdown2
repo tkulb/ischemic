@@ -1,0 +1,414 @@
+---
+title: Predicting Total Cost of Ischemic Heart Disease and With Characteristic and
+  Medical Touchpoint Data
+author: "Tanner Kulbashian"
+date: "December 10, 2017"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+
+# declare global chunk options
+knitr::opts_chunk$set(echo = FALSE)
+
+# determine output format dynamically
+out_type <- knitr::opts_knit$get("rmarkdown.pandoc.to")
+
+# define custom function for data label outputs
+# The DT::datatable function is great for producing tables for HTML docs
+# Otherwise, use the knitr::kable function to produce tables
+# You should use the R help to learn about these two functions as they
+# will need to be used to produce visually appealing tables for your
+# report
+
+display_output <- function(dataset, out_type, filter_opt = 'none') {
+  
+  if (out_type == "html") {
+    out_table <- DT::datatable(dataset, filter = filter_opt)
+  } else {
+    out_table <- knitr::kable(dataset)
+  } 
+  
+  out_table
+}
+
+hook_in <- function(x, options) {
+    x <- x[!grepl("^#\\s+", x)]
+    paste0("```r\n",
+          paste0(x, collapse="\n"),
+          "\n```")
+}
+knitr::knit_hooks$set(source = hook_in)
+
+
+```
+
+
+
+**Summary:** In this study, the relationship between total cost of ischemic heart disease \(Y_i\) and possible covariates \(X_{ij}\) have been analyzed and modeled from the Linear Regression Kutner, et. al. textbook (Appendix C.09). *
+<br/>
+
+
+##I. Introduction:  
+
+For this analysis, there is a sample of 788 patients with total cost \(Y_i\) and a host of assorted health features \(X_{ij}\). The data for the claim costs ranged from $0 to $52,664.90. Predictors \(X_{ij}\) considered in this analysis include age, gender, claim duration, and counts of interventions, drug, emergency room visits, complications, and comorbidities. The relationship is modeled using a first-order linear regression model ands some variable transformations are tested. Several model validation techniques are used to assess the soundness of the model fit and diagnostics, and there is a discussion of key assumptions.     
+<br/>
+ 
+#####**Tested Variables:**    
+
+\(Y_i\) = Total Cost        
+\(X_{1j}\) = Age        
+\(X_{2j}\) = Gender       
+\(X_{3j}\) = Interventions (count)          
+\(X_{4j}\) = Drugs (count)          
+\(X_{5j}\) = Emergency Room Visits (count)          
+\(X_{6j}\) = Complications (count)        
+\(X_{7j}\) = Comorbdities (count)       
+\(X_{8j}\) = Duration         
+ <br/>     
+        
+#####**Initial Model:**    
+
+The **initial model** is given by:
+
+\[Y_i = \beta_0 + \beta_1X_{i1} + \beta_2X_{i2} + \beta_3X_{i3} + \beta_4X_{i4} + \beta_5X_{i5} + \beta_6X_{i6} + \beta_7X_{i7} + \beta_8X_{i8} + \varepsilon_i\]
+
+where \(\varepsilon_i \sim iidN(0,\sigma^2)\), \(i = 1, 2, . . . , 788\), and \(\beta_0, \beta_1, . . . , \beta_8,\) and \(\sigma^2\) are the unknown model parameters.
+<br/>
+<br/>
+
+
+```{r include=FALSE}
+# Attach Packages
+library(dplyr)
+# library(asbio)
+library(xtable)
+library(shiny)
+library(knitr)
+library(DT)
+require(scatterplot3d)
+require(Hmisc)
+require(rgl)
+require(faraway)
+library(car)
+
+# Clean up
+rm(list=ls())
+
+
+# 3.1 rename variables, total_cost is target 
+datasetA = read.table("/Users/Tanner/Documents/KUMC/Linear Regressions/APPENC09.txt")
+dataset1 = datasetA %>% rename(id=V1, total_cost=V2,age=V3, gender = V4, interventions = V5, drugs = V6, emergency_visits=V7,complications=V8,comorbidities = V9, duration = V10)
+
+
+```
+
+##II. Preliminary Analysis   
+
+####***Figure A: Original Dataset Preview***    
+
+```{r pressure, echo=FALSE}
+#display_output not working properly in Knit HTML
+# display_output(dataset1, out_type="html")
+# display_output(dataset1, out_type="none")
+head(dataset1)
+```
+
+
+####***Figure B: Univariate Plots***
+Most of the univariate plots of the potential covariates appear ready for modeling, but drugs, complications, and comorbidities have skewed distributions that could affect model fit. The response variable \[Y_i\] also appears skewed and should be tested with log-transformation at a further point.
+
+```{r begin}
+
+# c1 = dataset1 %>% select(Y,X1,X2)
+# attach(dataset1)
+
+# length(dataset1$id)
+
+# Fit the initial model to see how it performs
+m1 = lm(total_cost~ age + gender + interventions + drugs + emergency_visits + complications + comorbidities + duration,data=dataset1)
+
+
+# Univariate Profiling - Create strip plots and boxcharts for all 10 variables
+for (i in 1:10){
+  par(mfrow=c(1,3))
+  stripchart(dataset1[,i], main = names(dataset1)[i],
+                          vertical = T, method = "jitter")
+  boxplot(dataset1[,i], main = names(dataset1)[i])
+  hist(dataset1[,i],main = names(dataset1)[i]
+                    )
+  par(mfrow=c(1,1))
+
+}
+
+```
+
+#####**Initial Relationship and Correlation Detection:**    
+
+####***Figure C: Bivariate Associations Plot: Total Cost and Possible Covariates***
+The correlations don't appear too severely in plots nor in the pearson correlation table. The covariate interventions is strongly correlated with the \(Y_i\) total cost (Pearson's ***r*** = 0.727) and emergency visits is fairly correlated too (***r*** = 0.377). Addressing correlation between potential covariates, emergency visits is correlated with interventions (***r*** = 0.367) and drugs (***r***= 0.528), as well as comorbidities and duration (***r*** = 0.495). Drugs and intereventions, as well as duration and interventions, both have Pearson's ***r*** of just greater than 0.22. Correlations should be monitored during feature selection, and final variance inflation factors (VIF) should be checked subsequently. 
+
+```{r response=FALSE}
+# Bivariate Associations
+# dev.off()
+pairs(total_cost ~ age + gender + interventions + drugs + emergency_visits + complications + comorbidities + duration,data=dataset1)
+```
+
+
+####***Figure D: Pearson Correlation Table***
+```{r}
+cor(dataset1)
+```
+<br/>
+
+
+
+##III. Statistical Analysis
+
+**Model Selection:**
+The five most predictive covariates were selected for the final model: Age \(X_{1j}\), Gender \(X_{2j}\), Interventions (count) \(X_{3j}\),        
+Drugs (count) \(X_{4j}\), and Emergency Room Visits (count) \(X_{5j}\). The marginal increase in $R_2$ is high at five parameters ($R_2$ = 0.547), but technically peaks at 7 ($R_2$ = 0.548). Offering perhaps contrary information, BIC suggests 2 parameters (BIC = -595.6) is optimal but 5 parameters (BIC = -589.2) is relatively close to this value too. Finally, Mallow's $C_p$ suggests 7 parameters ($C_p$ = 7.2), because it's closest to ***p*** (# of beta coefficents), but 5 parameters ($C_p$ = 7.6) is also close. Five parameters is ideal when parsimoniously balancing the three aforementioned diagnostic results, opting for less parameters when reasonable.
+
+$$\hat{Y} = 637.55  -46.72X_{1} + -932.26X_{2} + 812.08X_{3} - 376.53X_{4} + 427.66X_{5} + \varepsilon_i$$
+
+on 782 degrees of freedom.
+
+
+
+####***Figure E: Final Model Summary and ANOVA Table***
+
+
+```{r }
+
+# original model
+m1 = lm(total_cost~ age + gender + interventions + drugs + emergency_visits + complications + comorbidities + duration,data=dataset1)
+
+# removed bottom 3 variables, have full vs. reduced for age variables
+m2 = lm(total_cost~ age + gender + interventions + drugs + emergency_visits,data=dataset1)
+
+
+summary(m2)
+anova(m2)
+
+```
+
+
+
+##IV. Summary of Findings / General Discussion
+Using an $\alpha\ = 0.95, the p-values suggest the \(H_0\) can be rejected for each covariate in the final model summary. The final model fit results in an adjusted $R_2$ of 0.5471 and an F-statistic of 191.2 on 782 degrees of freedom. In the final model, the partial residual plots indicate normality and constancy of variance; interventions looked the most questionable given a slight curvilinear pattern in residuals here, which was tested with a log-transformation. However, a hypothesis test failed to reject the \(H_0\) that a model with this log-variable could better explain total risk than the original variable. The Q-Q Plot did indicate non-normal distribution of errors past two standard deviations, but relatively few data points fall here.
+
+Normality of errors question the validity of this model as soundly explaining total cost of ischemic heart disease in claimants. Further variables could be collected that could assuage the curvilinear relationship and heteroskedascity in the final model residuals. Further, they could improve the Q-Q plot on the right-hand side. However, the $R_2$ of 0.5471 indicates that a high proportion of variation in total cost can be explained by the covariates thus far featured in the model.  
+  
+  
+<br/>
+
+
+##V. References
+
+Kutner, M.H., Nachtsheim, C.J., Neter, J., Li, W. (2005), *Applied Linear Statistical Models*, 5th Edition, McGraw-Hill Irwin, New York, NY.
+  
+<br/>
+  
+##VI. Appendix
+  
+<br/>
+  
+###Feature Screening and Regression Modeling Assumptions
+
+####***Figure F: Automatic Feature Selection with Leaps***
+An exhaustive search with the "regsubsets" function is initially performed for all covariate combinations to pick the best model for each possible number of parameters (1 through 8).
+<br/>
+
+Ultimately, three model diagnostics suggest either 5 or 6 covariates is ideal for optimal model fit. First, $R_2$ peaks at parameter 7, but both 5 and 6 appear close in value. Next, BIC suggests 2 parameters but 5 is relatively close too. Finally, Mallow's $C_p$ suggests 6, because it's closest to ***p*** (# of beta coefficents). 
+<br/>
+
+Combining analyses from automatic feature selection with "Leaps" and three model diagnostics suggests removing the bottom 3 covariates: duration, complications, and comorbidities. Age could either be included or excluded, and a formal full vs. reduced hypothesis testing should reveal if it improves model fit or should be rejected in favor of parmisony.
+
+```{r response=FALSE}
+library(leaps)
+# library(textxy)
+m1.leaps <- regsubsets(total_cost~ duration + age + gender + interventions + drugs + emergency_visits + complications + comorbidities ,data=dataset1)
+(summary.leaps <- summary(m1.leaps))
+
+```
+
+
+
+####***Figure G: Adjusted $R^2$ for Incremental Parameters***
+```{r response=FALSE}
+plot(2:9, summary.leaps$adj, xlab = "Number of Parameters", ylab = expression(R^2[adj]))
+text(summary.leaps$adj, labels = round(summary.leaps$adj,digits=3))
+summary.leaps$adj # Adjusted R2 big
+```
+
+####***Figure H: BIC for Incremental Parameters***
+```{r response=FALSE}
+
+plot(2:9, summary.leaps$bic, xlab = "Number of Parameters", ylab = expression(BIC))
+text(summary.leaps$bic, labels = round(summary.leaps$bic,digits=1))
+summary.leaps$bic # BIC small
+```
+
+####***Figure I: Mallow's $C_p$ for Incremental Parameters***
+
+```{r response=FALSE}
+plot(2:9, summary.leaps$cp, xlab = "Number of Parameters", ylab = expression(C[p]))
+text(summary.leaps$cp, labels = round(summary.leaps$cp,digits=1))
+summary.leaps$cp 
+
+# Cp = p
+
+
+```
+<br/>
+
+
+
+####***Figure J: Reduced Model Summary (ex age) and ANOVA Table ***
+The reduced model removing age from the final model produces an $R_2$ and F considerably less than final model, and therefore should be rejected in favor of the final model.  
+```{r }
+m2.reduced = lm(total_cost~ gender + interventions + drugs + emergency_visits,data=dataset1)
+summary(m2.reduced)
+anova(m2.reduced)
+```
+
+
+####***Figure K: Partial Residual Plots***
+Emergency visits and interventions exhibit heteroskedascity in the error terms, and will be tested further with log-transformations for any curvilinear relationships.
+
+```{r response=FALSE}
+# check partial residual plots
+for (i in 1:5){
+  prplot(m2,i)
+}
+# 
+```
+
+
+####***Figure L: VIF Multicollinearity Test***
+No paramaters exhibit a variance inflation factor greater than 1.54, which indicates that multicollinearity should not impact the regression model fit.
+```{r response=FALSE}
+# Check for multicollinearity
+plot(vif(m2),main="VIF Multicollinearity Test",xlab="Parameters")
+```
+
+
+####***Figure M: Residuals Plot with Model Fit Line***
+The residual plot suggests slight but unpronounced heteroskedascity, which will be tested more formally.
+```{r response=FALSE}
+# check residuals
+resid = residuals(m2)
+# dev.new()
+plot(resid~dataset1$total_cost,main="Residuals Plot with Line")
+abline(0,0)
+```
+
+
+####***Figure N: Breusch-Pagan Test***
+The Breusch-Pagan Test does reject \[H_0\] in favor of the presence of heteroskedascity. However, the trend does not look pronounced in the model residual with average line fit. 
+
+```{r}
+# Breusch-Pagan Test
+require(car)
+ncvTest(m2)
+
+```
+
+
+####***Figure O: Studentized Residuals Plot***
+Some unevenly distributed points appear in the studentized residuals plot toward the left, but should not impact the model fit too much.
+```{r response=FALSE}
+plot(rstandard(m2)~predict(m2), xlab = expression(hat(Y)), ylab = "Studentized Deleted Residuals")
+abline(h=0)
+```
+
+
+####***Figure P: Q-Q Plot***
+The Q-Q plot indicates the errors aren't perfectly normally distributed, but don't appear too irregular to warrant model tweaking or further assessment.
+
+<br/>
+```{r response=FALSE}
+# Q-Q plot to check for normal distribution of errors
+qqnorm(residuals(m2))
+qqline(residuals(m2))
+```
+
+##Checking Independence
+
+
+####***Figure Q: Sequence Plot of Residuals***
+The sequence plot of the residuals in order of \[X_i\] does not reveal any irregularities.
+```{r response=FALSE}
+
+# Check independence of error terms
+plot(residuals(m2),type="l",ylab=expression(e[i]),main="Sequence Plot of Residuals")
+points(residuals(m2),pch=16,col="darkgray")
+abline(0,0,lty=2)
+summary(lm(residuals(m2)[-1]~-1+residuals(m2)[-47]))
+
+# sequence plot of residuals looks good 
+```
+
+
+####***Figure R: Cook's Distance Plot***
+Both points 45 and 147 should be monitored as outliers because of their affect when removed from the model, as well as their high influence positions in \[X_i\].
+
+```{r response=FALSE}
+# Check influence of individual points
+m2i <- influence(m2) # Save influence stats
+halfnorm(cooks.distance(m2),main="Cook's Distance Plot")
+# dataset1[6,]
+# head(dataset1)
+```
+
+
+####***Figure S: Testing Removal of Outliers***
+While removing outliers 45 and 147 improved the model fit in terms of $R^2$, the model fit was fine beforehand. Leaving outliers in the final model does compromise model fit nor does it change the final model selection enough to warrant a removal.
+
+```{r }
+#*Model summary without two outliers*
+m2.2 = lm(total_cost~ age + gender + interventions + drugs + emergency_visits,data=dataset1,subset = c(-45,-147))
+summary(m2.2)
+# R^2 increases from 0.5471 with df=782 to 0.5917 on df = 780
+
+```
+
+####***Figure T: Model Summaries--Testing Models with Log-transformations***
+Log-transformed and squared variables that were tested include the target variable, total cost, and covariates interventions and emergency visits. Values of 0 prior to the log-transformation were hard-coded as 0 in order to fit the new models despite true values of -\infinity. Both adjusted $R^2$ and F values were assessed with no improvements, and therefore no data transformations were applied to any of the 5 covariates.
+
+```{r }
+
+dataset2.a = dataset1 %>% mutate(total_cost_log = ifelse(log(total_cost) != -Inf, log(total_cost),0))
+
+dataset2.b = dataset1 %>% mutate(interventions_log = ifelse(log(interventions) != -Inf, log(interventions),0))
+
+dataset2.c = dataset1 %>% mutate(emergency_visits_log = ifelse(log(emergency_visits) != -Inf, log(emergency_visits),0))
+
+
+
+m2.3 = lm(total_cost_log ~ age + gender + interventions + drugs + emergency_visits,data=dataset2.a)
+summary(m2.3)
+
+m2.4 = lm(total_cost ~ age + gender + interventions_log + drugs + emergency_visits,data=dataset2.b)
+summary(m2.4)
+
+m2.5 = lm(total_cost ~ age + gender + interventions + drugs + emergency_visits_log,data=dataset2.c)
+summary(m2.5)
+
+m2.6 = lm(total_cost ~ age + gender + interventions^2 + drugs + emergency_visits,data=dataset1)
+summary(m2.6)
+
+m2.7 = lm(total_cost ~ age + gender + interventions + drugs + emergency_visits^2,data=dataset1)
+summary(m2.7)
+
+
+
+
+```
+
+
+
+
